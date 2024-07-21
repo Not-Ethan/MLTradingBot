@@ -6,14 +6,17 @@ from datetime import datetime
 from alpaca_trade_api import REST 
 from timedelta import Timedelta 
 from finbert_utils import estimate_sentiment
+import os
+from dotenv import load_dotenv
+from typing import Literal
 
-API_KEY = "YOUR API KEY" 
-API_SECRET = "YOUR API SECRET" 
-BASE_URL = "https://paper-api.alpaca.markets"
+BASE_URL = "https://paper-api.alpaca.markets/v2"
+
+load_dotenv("secrets.env")
 
 ALPACA_CREDS = {
-    "API_KEY":API_KEY, 
-    "API_SECRET": API_SECRET, 
+    "API_KEY":os.getenv("API_KEY"), 
+    "API_SECRET": os.getenv("API_SECRET"), 
     "PAPER": True
 }
 
@@ -23,7 +26,8 @@ class MLTrader(Strategy):
         self.sleeptime = "24H" 
         self.last_trade = None 
         self.cash_at_risk = cash_at_risk
-        self.api = REST(base_url=BASE_URL, key_id=API_KEY, secret_key=API_SECRET)
+        self.ma_tolerence = 1
+        self.api = REST(base_url=BASE_URL, key_id=ALPACA_CREDS["API_KEY"], secret_key=ALPACA_CREDS["API_SECRET"])
 
     def position_sizing(self): 
         cash = self.get_cash() 
@@ -50,7 +54,7 @@ class MLTrader(Strategy):
         probability, sentiment = self.get_sentiment()
 
         if cash > last_price: 
-            if sentiment == "positive" and probability > .999: 
+            if sentiment == "positive" and probability > .999:
                 if self.last_trade == "sell": 
                     self.sell_all() 
                 order = self.create_order(
@@ -63,7 +67,7 @@ class MLTrader(Strategy):
                 )
                 self.submit_order(order) 
                 self.last_trade = "buy"
-            elif sentiment == "negative" and probability > .999: 
+            elif sentiment == "negative" and probability > .999:
                 if self.last_trade == "buy": 
                     self.sell_all() 
                 order = self.create_order(
@@ -76,6 +80,28 @@ class MLTrader(Strategy):
                 )
                 self.submit_order(order) 
                 self.last_trade = "sell"
+    def get_moving_average(self, symbol, window, step:str, source:Literal['close', 'open'] = 'close'):
+        prices = self.get_historical_prices(symbol, length=window,timestep=step)
+        
+        return sum(prices.df[source]) / len(prices.df[source])
+    def get_exponential_moving_average(self, symbol, window, step:str, source:Literal['close', 'open'] = 'close'):
+        prices = self.get_historical_prices(symbol, length=window + 1, timestep=step)  # Get one extra period for initial SMA calculation
+        price_series = prices.df[source].values
+
+        # Calculate the smoothing factor
+        alpha = 2 / (window + 1)
+
+        # Initialize the EMA with the SMA of the first `window` periods
+        sma = sum(price_series[:window]) / window
+        ema = [sma]
+
+        # Calculate the EMA for the rest of the periods
+        for price in price_series[window:]:
+            ema_value = (price * alpha) + (ema[-1] * (1 - alpha))
+            ema.append(ema_value)
+
+        # Return the last EMA value (most recent)
+        return ema[-1]
 
 start_date = datetime(2020,1,1)
 end_date = datetime(2023,12,31) 
@@ -89,6 +115,6 @@ strategy.backtest(
     end_date, 
     parameters={"symbol":"SPY", "cash_at_risk":.5}
 )
-# trader = Trader()
-# trader.add_strategy(strategy)
-# trader.run_all()
+trader = Trader()
+trader.add_strategy(strategy)
+trader.run_all()
